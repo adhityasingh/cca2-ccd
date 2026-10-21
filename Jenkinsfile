@@ -1,5 +1,6 @@
 pipeline {
     agent any
+    triggers { pollSCM('H/2 * * * *') }
     environment {
         AWS_REGION   = 'ap-south-1'
         ECR_REGISTRY = '257526643717.dkr.ecr.ap-south-1.amazonaws.com'
@@ -37,10 +38,41 @@ pipeline {
                 '''
             }
         }
+        stage('Minikube Deployment') {
+            steps {
+                sh '''
+                    minikube status > /dev/null 2>&1 || minikube start --driver=docker --cpus=2 --memory=3000
+                    kubectl config use-context minikube
+                    set +x
+                    kubectl create secret docker-registry ecr-secret \
+                      --docker-server=${ECR_REGISTRY} --docker-username=AWS \
+                      --docker-password="$(aws ecr get-login-password --region ${AWS_REGION})" \
+                      --dry-run=client -o yaml | kubectl apply -f -
+                    set -x
+                    sed "s|image: .*|image: ${IMAGE}:${TAG}|" k8s/deployment.yaml | kubectl apply -f -
+                    kubectl apply -f k8s/service.yaml
+                '''
+            }
+        }
+        stage('Verification') {
+            steps {
+                sh '''
+                    kubectl rollout status deployment/flight-booking --timeout=180s
+                    kubectl get pods -o wide
+                    kubectl get deployment flight-booking
+                    kubectl get svc flight-booking-service
+                    echo "Image running in the cluster:"
+                    kubectl get deployment flight-booking -o jsonpath='{.spec.template.spec.containers[0].image}'
+                    echo
+                    curl -fsS http://$(minikube ip):30080/ | grep -q "Skyline Air"
+                    echo "App is reachable inside the server at http://$(minikube ip):30080"
+                '''
+            }
+        }
     }
     post {
         always  { sh 'docker rm -f flight-test || true' }
-        success { echo "Pipeline completed. Image pushed: ${IMAGE}:${TAG}" }
+        success { echo "Pipeline completed. Version ${TAG} deployed: ${IMAGE}:${TAG}" }
         failure { echo 'Pipeline failed!' }
     }
 }
