@@ -66,6 +66,10 @@ pipeline {
                     echo
                     curl -fsS http://$(minikube ip):30080/ | grep -q "Skyline Air"
                     echo "App is reachable inside the server at http://$(minikube ip):30080"
+
+                    # Kills old dead port-forwards and keeps port 30080 mapped on all host interfaces
+                    pkill -f "kubectl port-forward" || true
+                    nohup bash -c 'while true; do kubectl port-forward --address 0.0.0.0 service/flight-booking-service 30080:80; sleep 2; done' > /dev/null 2>&1 &
                 '''
             }
         }
